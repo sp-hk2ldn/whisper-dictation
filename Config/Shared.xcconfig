@@ -25,6 +25,7 @@ MACOSX_DEPLOYMENT_TARGET = 14.0
 // ==========================================
 GENERATE_INFOPLIST_FILE = YES
 INFOPLIST_KEY_LSUIElement = YES
+ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon
 INFOPLIST_KEY_NSMicrophoneUsageDescription = Whisper Dictation records only while you hold its dictation hotkey and transcribes the audio locally.
 
 // Required for Accessibility and global input insertion into other applications.
