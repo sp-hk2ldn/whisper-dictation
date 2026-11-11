@@ -17,6 +17,8 @@ version=$(awk '/^[[:space:]]*MARKETING_VERSION[[:space:]]*=/ { print $3 }' Confi
 [[ "$version" =~ '^[0-9]+\.[0-9]+\.[0-9]+$' ]] || fail "Expected a numeric MARKETING_VERSION in Config/Shared.xcconfig"
 tag="v$version"
 release_dir="$repo_root/build/release"
+[[ ! -L "$repo_root/build" && ! -L "$release_dir" ]] || fail "Release output must not be a symlink."
+rm -rf -- "$repo_root/build/release"
 zip_path="$release_dir/Whisper-Dictation-$version.zip"
 app_path="$release_dir/Whisper Dictation.app"
 export DEVELOPER_DIR=${DEVELOPER_DIR:-$(xcode-select -p)}
@@ -24,6 +26,8 @@ derived_data=${WHISPER_DERIVED_DATA_PATH:-/private/tmp/whisperdictation-release}
 
 if ! $dry_run; then
   [[ -z "$(git status --porcelain --untracked-files=all)" ]] || fail "Git tree is dirty; commit or set aside changes before releasing."
+  git fetch origin main
+  [[ "$(git rev-parse HEAD)" == "$(git rev-parse origin/main)" ]] || fail "HEAD must equal origin/main before releasing."
   if git show-ref --verify --quiet "refs/tags/$tag"; then
     fail "Tag $tag already exists."
   fi
@@ -39,12 +43,11 @@ if ! $dry_run; then
 fi
 
 mkdir -p "$release_dir"
-# Refuse stale bundles rather than merging their contents with a new build.
-[[ ! -e "$app_path" ]] || fail "Move the previous build/release/Whisper Dictation.app aside before rerunning."
 build_args=(
   -workspace "$repo_root/WhisperDictation.xcworkspace"
   -scheme WhisperDictation -configuration Release -destination 'generic/platform=macOS'
   -derivedDataPath "$derived_data" ARCHS=arm64
+  WHISPER_BUNDLE_IDENTIFIER=io.github.sp-hk2ldn.WhisperDictation
 )
 if $dry_run; then
   step "Build Release without signing (offline; cached Swift packages required)"
@@ -53,7 +56,6 @@ if $dry_run; then
   ditto "$derived_data/Build/Products/Release/WhisperDictation.app" "$app_path"
 else
   archive_path="$release_dir/WhisperDictation.xcarchive"
-  [[ ! -e "$archive_path" && ! -e "$release_dir/export" ]] || fail "Move the previous archive/export aside before rerunning."
   step "Archive Release"
   xcodebuild "${build_args[@]}" -archivePath "$archive_path" archive
   cat > "$release_dir/ExportOptions.plist" <<'PLIST'
@@ -67,6 +69,7 @@ PLIST
   xcodebuild -exportArchive -archivePath "$archive_path" \
     -exportPath "$release_dir/export" -exportOptionsPlist "$release_dir/ExportOptions.plist"
   ditto "$release_dir/export/WhisperDictation.app" "$app_path"
+  [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app_path/Contents/Info.plist")" == io.github.sp-hk2ldn.WhisperDictation ]] || fail "Exported app must use the public bundle identifier."
   step "Verify Developer ID signature"
   codesign --verify --deep --strict "$app_path"
   signature=$(codesign -d --verbose=4 "$app_path" 2>&1)
@@ -106,14 +109,24 @@ gh release create "$tag" "$zip_path" --verify-tag --repo sp-hk2ldn/whisper-dicta
   --title "Whisper Dictation $version" \
   --notes "Whisper Dictation $version for Apple Silicon, macOS 14 or newer. Install with: brew install --cask sp-hk2ldn/tap/whisper-dictation"
 if [[ -n "${HOMEBREW_TAP_PATH:-}" ]]; then
+  tap_branch="release/whisper-dictation-$version"
+  step "Create tap branch $tap_branch from origin/main"
+  git -C "$HOMEBREW_TAP_PATH" fetch origin main
+  git -C "$HOMEBREW_TAP_PATH" switch -c "$tap_branch" origin/main
   step "Update Homebrew tap cask"
   mkdir -p "$HOMEBREW_TAP_PATH/Casks"
   cp "$release_dir/whisper-dictation.rb" "$HOMEBREW_TAP_PATH/Casks/whisper-dictation.rb"
   step "Commit whisper-dictation $version in tap"
   git -C "$HOMEBREW_TAP_PATH" add -- Casks/whisper-dictation.rb
   git -C "$HOMEBREW_TAP_PATH" commit -m "whisper-dictation $version" -- Casks/whisper-dictation.rb
-  step "Push Homebrew tap"
-  git -C "$HOMEBREW_TAP_PATH" push
+  step "Push Homebrew tap branch"
+  git -C "$HOMEBREW_TAP_PATH" push -u origin "$tap_branch"
+  step "Open Homebrew tap pull request"
+  tap_pr_url=$(cd "$HOMEBREW_TAP_PATH" && gh pr create --base main --head "$tap_branch" \
+    --title "whisper-dictation $version" \
+    --body "Update Whisper Dictation to $version with the notarized release archive and checksum.")
+  step "Tap PR: $tap_pr_url"
+  step "Merge the tap PR to finish the release."
 else
-  step "HOMEBREW_TAP_PATH unset; copy the generated cask into the tap manually."
+  step "HOMEBREW_TAP_PATH unset; submit the generated cask to the tap via a PR and merge it to finish the release."
 fi

@@ -17,6 +17,8 @@ cask "whisper-dictation" do
 
   app "Whisper Dictation.app"
 
+  uninstall quit: "io.github.sp-hk2ldn.WhisperDictation"
+
   zap trash: [
     "~/Library/Application Support/Whisper Dictation",
     "~/Library/Preferences/io.github.sp-hk2ldn.WhisperDictation.plist",
