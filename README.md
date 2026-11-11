@@ -296,9 +296,12 @@ defaults read io.github.sp-hk2ldn.WhisperDictation codexMicroInputDiagnostic
 
 ## Install with Homebrew
 
-Once a notarized release is published to the personal tap:
+Releases are signed with Developer ID and notarized by Apple. Homebrew asks you
+to trust a third-party tap once before it installs from it:
 
 ```sh
+brew tap sp-hk2ldn/tap
+brew trust sp-hk2ldn/tap
 brew install --cask sp-hk2ldn/tap/whisper-dictation
 ```
 
