@@ -30,9 +30,19 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Debug.xcconfig,
+				Local.xcconfig,
+				Local.xcconfig.example,
 				Release.xcconfig,
 				Shared.xcconfig,
 				Tests.xcconfig,
+				WhisperDictation.entitlements,
+			);
+			target = 8BC2655B2DEDD3F400F279A4 /* WhisperDictation */;
+		};
+		8BD71C1F2DEE424400CEDD92 /* Exceptions for "WhisperDictation" folder in "WhisperDictation" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				WhisperDictation.xctestplan,
 			);
 			target = 8BC2655B2DEDD3F400F279A4 /* WhisperDictation */;
 		};
@@ -49,6 +59,9 @@
 		};
 		8BC2655E2DEDD3F400F279A4 /* WhisperDictation */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				8BD71C1F2DEE424400CEDD92 /* Exceptions for "WhisperDictation" folder in "WhisperDictation" target */,
+			);
 			path = WhisperDictation;
 			sourceTree = "<group>";
 		};
