@@ -1,3 +1,6 @@
 // Copy to Config/Local.xcconfig. That file is ignored by git.
-WHISPER_BUNDLE_IDENTIFIER = com.example.WhisperDictation
+// Keep the public bundle identifier for Homebrew releases and preference cleanup.
+WHISPER_BUNDLE_IDENTIFIER = io.github.sp-hk2ldn.WhisperDictation
 DEVELOPMENT_TEAM = YOURTEAMID
+// Optional release signing overrides belong here, never in shared config.
+// CODE_SIGN_IDENTITY = Developer ID Application

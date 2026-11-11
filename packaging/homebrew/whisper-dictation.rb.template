@@ -1,0 +1,24 @@
+cask "whisper-dictation" do
+  version "@VERSION@"
+  sha256 "@SHA256@"
+
+  url "https://github.com/sp-hk2ldn/whisper-dictation/releases/download/v#{version}/Whisper-Dictation-#{version}.zip"
+  name "Whisper Dictation"
+  desc "Private, on-device push-to-talk dictation"
+  homepage "https://github.com/sp-hk2ldn/whisper-dictation"
+
+  livecheck do
+    url :url
+    strategy :github_latest
+  end
+
+  depends_on macos: ">= :sonoma"
+  depends_on arch: :arm64
+
+  app "Whisper Dictation.app"
+
+  zap trash: [
+    "~/Library/Application Support/Whisper Dictation",
+    "~/Library/Preferences/io.github.sp-hk2ldn.WhisperDictation.plist",
+  ]
+end
