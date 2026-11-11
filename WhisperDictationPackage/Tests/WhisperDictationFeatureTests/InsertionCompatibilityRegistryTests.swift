@@ -51,6 +51,14 @@ struct InsertionCompatibilityRegistryTests {
     }
 
     @Test
+    func t3CodeRoutesThroughPasteOnly() {
+        let t3Profile = InsertionCompatibilityRegistry.profile(
+            for: "com.t3tools.t3code"
+        )
+        #expect(t3Profile.route == .pasteOnly)
+    }
+
+    @Test
     func pasteOnlyRestoreDelayIsSlowerThanDefault() {
         // Chromium-based apps need more time than the default 300ms to
         // consume a pasteboard change and route it to the contenteditable's

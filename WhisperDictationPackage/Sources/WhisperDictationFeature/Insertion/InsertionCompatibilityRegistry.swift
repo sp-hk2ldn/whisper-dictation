@@ -27,6 +27,9 @@ enum KnownTextDestination: String, Sendable {
     // The Claude desktop app is Electron too, so it takes the same paste
     // route as Hermes.
     case claude = "com.anthropic.claudefordesktop"
+    // T3 Code's chat box is a web text field. Setting AXSelectedText there
+    // reports success without the text appearing, so it takes the paste route.
+    case t3Code = "com.t3tools.t3code"
 }
 
 enum InsertionCompatibilityRegistry {
@@ -42,6 +45,10 @@ enum InsertionCompatibilityRegistry {
             pasteboardRestoreDelay: .milliseconds(1500)
         ),
         .claude: InsertionCompatibilityProfile(
+            route: .pasteOnly,
+            pasteboardRestoreDelay: .milliseconds(1500)
+        ),
+        .t3Code: InsertionCompatibilityProfile(
             route: .pasteOnly,
             pasteboardRestoreDelay: .milliseconds(1500)
         ),
