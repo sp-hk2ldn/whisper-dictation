@@ -294,6 +294,17 @@ opened, the key sent, or `ignored: <reason>`:
 defaults read io.github.sp-hk2ldn.WhisperDictation codexMicroInputDiagnostic
 ```
 
+## Install with Homebrew
+
+Once a notarized release is published to the personal tap:
+
+```sh
+brew install --cask sp-hk2ldn/tap/whisper-dictation
+```
+
+Requires Apple Silicon and macOS 14 or newer. Grant Microphone and Accessibility
+access using the one-time setup below. Maintainers: see [Releasing](docs/RELEASING.md).
+
 ## Build and install
 
 The local build uses the Xcode selected by `xcode-select` (or `DEVELOPER_DIR`,
@@ -314,9 +325,8 @@ and launches it. The app is an `LSUIElement` menu-bar utility, so it has no
 Dock icon or normal application window. Look for the microphone icon in the
 menu bar.
 
-This is a local Apple Development-signed build. Public distribution would
-add Developer ID signing, hardened runtime, notarization, and a distributable
-archive; those are intentionally outside this MVP.
+This is a local development-signed build. The manual [release workflow](docs/RELEASING.md)
+adds Developer ID signing, hardened runtime, notarization, and Homebrew packaging.
 
 ## One-time setup
 
@@ -493,7 +503,7 @@ cleanup.
 - push-to-talk only; toggle mode is a replaceable later addition
 - one recommended model; no model picker yet
 - model remains loaded until the process quits
-- local development signing only; not notarized for distribution
+- public distribution requires a maintainer to run the notarized release workflow
 
 ## Privacy and permissions
 
@@ -511,10 +521,9 @@ The complete invariant list is in
 ## Project status
 
 This repository contains a working local MVP aimed at Apple Silicon and macOS
-14 or newer. It is development-signed for personal installation, not packaged
-as a notarized public release. Model selection, toggle-to-talk, editable
-streaming partials, and distribution packaging remain intentionally outside the
-current slice.
+14 or newer. Local installs are development-signed; public releases use the manual
+notarized packaging workflow. Model selection, toggle-to-talk, and editable
+streaming partials remain outside the current slice.
 
 WhisperKit and the Whisper model have their own upstream licenses. This
 repository's own code is released under the MIT License (see `LICENSE`).

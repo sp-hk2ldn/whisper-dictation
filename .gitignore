@@ -63,3 +63,6 @@ fastlane/test_output
 # Local signing and bundle identifier overrides
 Config/Local.xcconfig
 .DS_Store
+
+# Local release artifacts
+build/
