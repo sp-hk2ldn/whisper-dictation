@@ -1,3 +1,10 @@
+//
+//  DictationRuntime.swift
+//  WhisperDictation
+//
+//  Created by Stephen Parker on 27/11/2026.
+//
+
 import AppKit
 @preconcurrency import AVFoundation
 import Carbon
@@ -43,6 +50,7 @@ public final class DictationRuntime: ObservableObject {
     @Published public private(set) var microphoneAuthorization: AVAuthorizationStatus
 
     public let coordinator: DictationSessionCoordinator
+    public let history: DictationHistory
     public let microLighting: CodexMicroLighting
     private var microLightingSubscription: AnyCancellable?
 
@@ -87,10 +95,12 @@ public final class DictationRuntime: ObservableObject {
 
         let transcriber = WhisperKitTranscriber()
         let insertion = MacTextInsertionService()
+        let history = DictationHistory()
 
         self.audio = audio
         self.transcriber = transcriber
         self.insertion = insertion
+        self.history = history
         runSmokeOnce = deterministicSmoke
             && arguments.contains("--smoke-run-once")
         smokeStatusURL = smokeStatusPath.map(URL.init(fileURLWithPath:))
@@ -99,10 +109,8 @@ public final class DictationRuntime: ObservableObject {
             transcriber: transcriber,
             targets: insertion,
             inserter: insertion,
-            copyRecovery: { text in
-                NSPasteboard.general.clearContents()
-                return NSPasteboard.general.setString(text, forType: .string)
-            }
+            copyRecovery: Self.copyToPasteboard,
+            record: history.add
         )
 
         let defaults = UserDefaults.standard
@@ -245,10 +253,25 @@ public final class DictationRuntime: ObservableObject {
 
     public func copyRecoveryText() {
         guard let text = coordinator.recoveryText, !text.isEmpty else { return }
-        NSPasteboard.general.clearContents()
-        guard NSPasteboard.general.setString(text, forType: .string) else { return }
+        guard Self.copyToPasteboard(text) else { return }
         coordinator.dismissOutcome()
         lastError = nil
+    }
+
+    public func copyLastDictation() {
+        guard let entry = history.entries.first else { return }
+        _ = Self.copyToPasteboard(entry.text)
+    }
+
+    public func copyDictation(id: UUID) {
+        guard let entry = history.entries.first(where: { $0.id == id }) else { return }
+        _ = Self.copyToPasteboard(entry.text)
+    }
+
+    private static func copyToPasteboard(_ text: String) -> Bool {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        return pasteboard.setString(text, forType: .string)
     }
 
     public func dismissOutcome() {
@@ -297,8 +320,9 @@ public final class DictationRuntime: ObservableObject {
                 guard let id = await pressedTask?.value, let self,
                       let job = coordinator.enqueueRecording(sessionID: id) else { return }
                 Task { [weak self] in
-                    await job.value
-                    await self?.recordCompletionDiagnostic()
+                    let timings = await job.value
+                    guard let self else { return }
+                    await recordCompletionDiagnostic(timings)
                 }
             }
         }
@@ -337,11 +361,13 @@ public final class DictationRuntime: ObservableObject {
     }
 
     private func finishRecording(sessionID: UUID? = nil) async {
-        await coordinator.endDictation(sessionID: sessionID)
-        await recordCompletionDiagnostic()
+        let timings = await coordinator.enqueueRecording(sessionID: sessionID)?.value
+        await recordCompletionDiagnostic(timings)
     }
 
-    private func recordCompletionDiagnostic() async {
+    private func recordCompletionDiagnostic(
+        _ timings: DictationSessionCoordinator.SessionTimings?
+    ) async {
         let diagnostic = await insertion.diagnosticSummary()
         let failure = coordinator.failureDiagnostic.map {
             " failure=\($0)"
@@ -349,6 +375,7 @@ public final class DictationRuntime: ObservableObject {
         writeLastSessionDiagnostic(
             "finished phase=\(coordinator.phase) insertion=\(diagnostic)"
                 + failure
+                + Self.sessionTimingDiagnostic(timings)
         )
         guard coordinator.phase == .needsRecovery else { return }
         UserDefaults.standard.set(
@@ -356,6 +383,28 @@ public final class DictationRuntime: ObservableObject {
             forKey: "lastInsertionDiagnostic"
         )
         lastError = Self.insertionFailureMessage(for: diagnostic)
+    }
+
+    private static func sessionTimingDiagnostic(
+        _ timings: DictationSessionCoordinator.SessionTimings?
+    ) -> String {
+        let audio = formattedSeconds(timings?.audioDuration)
+        let transcriptionDuration = timings?.transcriptionDuration
+        let modelLoadDuration = timings?.modelLoadDuration
+            ?? transcriptionDuration.map { _ in Duration.zero }
+        let load = formattedSeconds(modelLoadDuration.map { seconds(from: $0) })
+        let transcription = formattedSeconds(transcriptionDuration.map { seconds(from: $0) })
+        return " audio=\(audio) load=\(load) transcribe=\(transcription)"
+    }
+
+    private static func seconds(from duration: Duration) -> Double {
+        let components = duration.components
+        return Double(components.seconds) + Double(components.attoseconds) / 1e18
+    }
+
+    private static func formattedSeconds(_ seconds: Double?) -> String {
+        guard let seconds else { return "n/a" }
+        return String(format: "%.2fs", seconds)
     }
 
     private static func insertionFailureMessage(for diagnostic: String) -> String {

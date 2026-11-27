@@ -1,9 +1,41 @@
+//
+//  OverlappingDictationTests.swift
+//  WhisperDictation
+//
+//  Created by Stephen Parker on 27/11/2026.
+//
+
 import Foundation
 import Testing
 @testable import WhisperDictationFeature
 
 @MainActor
 struct OverlappingDictationTests {
+    @Test
+    func recordsTranscriptReturnedAfterCancellation() async throws {
+        let expectedText = "  Keep this too.\n"
+        let recorder = TranscriptRecorderFake()
+        let transcriber = GatedTranscriber(stubbedTranscript: FinalTranscript(text: expectedText))
+        let coordinator = DictationSessionCoordinator(
+            audio: OverlapAudio(),
+            transcriber: transcriber,
+            targets: RetainedTargets(),
+            inserter: GatedInserter(),
+            record: recorder.record
+        )
+
+        let startedID = await coordinator.beginDictation()
+        let sessionID = try #require(startedID)
+        let queued = coordinator.enqueueRecording(sessionID: sessionID)
+        let job = try #require(queued)
+        await transcriber.entered.wait()
+        await coordinator.cancelDictation()
+        await transcriber.proceed.open()
+        _ = await job.value
+
+        #expect(recorder.transcripts == [sessionID: [expectedText]])
+    }
+
     @Test func recordsDuringInsertionAndPreservesOrder() async {
         let rig = OverlapRig()
         await rig.coordinator.beginDictation()
@@ -17,8 +49,8 @@ struct OverlappingDictationTests {
         let second = rig.coordinator.enqueueRecording(sessionID: nextID)!
         #expect(await rig.transcriber.calls == 1)
         await rig.inserter.proceed.open()
-        await first.value
-        await second.value
+        _ = await first.value
+        _ = await second.value
 
         #expect(await rig.inserter.texts == ["phrase 1", "phrase 2"])
         #expect(rig.coordinator.phase == .idle)
@@ -37,8 +69,8 @@ struct OverlappingDictationTests {
         let freshID = await rig.coordinator.beginDictation()
         #expect(freshID != nil)
         await rig.inserter.proceed.open()
-        await first.value
-        await second.value
+        _ = await first.value
+        _ = await second.value
         #expect(rig.coordinator.phase == .recording)
         #expect(await rig.transcriber.calls == 1)
         await rig.coordinator.endDictation(sessionID: freshID)
@@ -47,26 +79,50 @@ struct OverlappingDictationTests {
         #expect(await rig.targets.retainedCount == 0)
     }
 
-    @Test func queueIsBoundedAndChangedTargetRecoversNextTranscript() async {
+    @Test func queueIsBoundedAndChangedTargetRecoversNextTranscript() async throws {
         let rig = OverlapRig()
         await rig.coordinator.beginDictation()
         let first = rig.coordinator.enqueueRecording()!
         await rig.inserter.entered.wait()
-        var queued: [Task<Void, Never>] = []
+        var queued: [Task<DictationSessionCoordinator.SessionTimings?, Never>] = []
         for _ in 0..<3 {
             #expect(await rig.coordinator.beginDictation() != nil)
-            queued.append(rig.coordinator.enqueueRecording()!)
+            let job = try #require(rig.coordinator.enqueueRecording())
+            queued.append(job)
         }
         #expect(await rig.coordinator.beginDictation() == nil)
         await rig.targets.invalidate()
         await rig.inserter.proceed.open()
-        await first.value
-        for task in queued { await task.value }
+        _ = await first.value
+        for task in queued {
+            _ = await task.value
+        }
         #expect(await rig.inserter.texts == ["phrase 1"])
         #expect(rig.coordinator.recoveryText == "phrase 2\n\nphrase 3\n\nphrase 4")
         #expect(rig.coordinator.phase == .needsRecovery)
         #expect(await rig.targets.retainedCount == 0)
     }
+}
+
+private actor GatedTranscriber: Transcribing {
+    let entered = Latch()
+    let proceed = Latch()
+    private let stubbedTranscript: FinalTranscript
+
+    init(stubbedTranscript: FinalTranscript) {
+        self.stubbedTranscript = stubbedTranscript
+    }
+
+    func transcribeFinal(
+        _ utterance: CapturedUtterance,
+        sessionID: UUID
+    ) async throws -> FinalTranscript {
+        await entered.open()
+        await proceed.wait()
+        return stubbedTranscript
+    }
+
+    func cancel(sessionID: UUID) async {}
 }
 
 @MainActor
