@@ -1,10 +1,3 @@
-//
-//  DictationHistoryTests.swift
-//  WhisperDictation
-//
-//  Created by Stephen Parker on 27/11/2026.
-//
-
 import Foundation
 import Testing
 @testable import WhisperDictationFeature
@@ -12,10 +5,13 @@ import Testing
 @MainActor
 struct DictationHistoryTests {
     private static let recordedDate = Date(timeIntervalSince1970: 1_700_000_000)
+    private static let corruptData = Data("invalid JSON".utf8)
 
     @Test
     func newestEntryAppearsFirst() {
-        let history = makeHistory(at: temporaryHistoryURL())
+        let fileURL = temporaryHistoryURL()
+        defer { removeTemporaryHistory(at: fileURL) }
+        let history = makeHistory(at: fileURL)
         let firstID = UUID()
         let secondID = UUID()
         let expectedIDs = [secondID, firstID]
@@ -28,7 +24,9 @@ struct DictationHistoryTests {
 
     @Test
     func theTwentyFirstEntryEvictsTheOldest() {
-        let history = makeHistory(at: temporaryHistoryURL())
+        let fileURL = temporaryHistoryURL()
+        defer { removeTemporaryHistory(at: fileURL) }
+        let history = makeHistory(at: fileURL)
         let ids = (1...21).map { _ in UUID() }
         let expectedIDs = Array(ids.dropFirst().reversed())
 
@@ -42,6 +40,7 @@ struct DictationHistoryTests {
     @Test
     func historySurvivesReload() {
         let fileURL = temporaryHistoryURL()
+        defer { removeTemporaryHistory(at: fileURL) }
         let history = makeHistory(at: fileURL)
         let expectedEntry = DictationHistory.Entry(
             id: UUID(),
@@ -57,7 +56,9 @@ struct DictationHistoryTests {
 
     @Test
     func aCorruptFileLoadsAsEmpty() throws {
-        let fileURL = try corruptHistoryURL()
+        let fileURL = temporaryHistoryURL()
+        defer { removeTemporaryHistory(at: fileURL) }
+        try writeCorruptHistory(at: fileURL)
         let expectedEntries: [DictationHistory.Entry] = []
 
         let history = makeHistory(at: fileURL)
@@ -66,8 +67,10 @@ struct DictationHistoryTests {
     }
 
     @Test
-    func theNextWriteReplacesCorruptHistory() throws {
-        let fileURL = try corruptHistoryURL()
+    func theNextWriteStartsNewHistoryAfterCorruption() throws {
+        let fileURL = temporaryHistoryURL()
+        defer { removeTemporaryHistory(at: fileURL) }
+        try writeCorruptHistory(at: fileURL)
         let history = makeHistory(at: fileURL)
         let expectedID = UUID()
 
@@ -78,8 +81,27 @@ struct DictationHistoryTests {
     }
 
     @Test
+    func theNextWritePreservesCorruptHistoryInAnArchive() throws {
+        let fileURL = temporaryHistoryURL()
+        defer { removeTemporaryHistory(at: fileURL) }
+        try writeCorruptHistory(at: fileURL)
+        let history = makeHistory(at: fileURL)
+        let archive = fileURL.deletingLastPathComponent().appending(
+            path: "history-unreadable-1700000000.json",
+            directoryHint: .notDirectory
+        )
+        let expectedArchive = Self.corruptData
+
+        history.add(id: UUID(), text: "New dictation")
+        let archived = try Data(contentsOf: archive)
+
+        #expect(archived == expectedArchive)
+    }
+
+    @Test
     func theFileIsOnlyReadableAndWritableByItsOwner() throws {
         let fileURL = temporaryHistoryURL()
+        defer { removeTemporaryHistory(at: fileURL) }
         let history = makeHistory(at: fileURL)
         let expectedPermissions = 0o600
 
@@ -94,14 +116,17 @@ struct DictationHistoryTests {
         DictationHistory(fileURL: fileURL, now: { Self.recordedDate })
     }
 
-    private func corruptHistoryURL() throws -> URL {
-        let fileURL = temporaryHistoryURL()
+    private func writeCorruptHistory(at fileURL: URL) throws {
         try FileManager.default.createDirectory(
             at: fileURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        try Data("invalid JSON".utf8).write(to: fileURL)
-        return fileURL
+        try Self.corruptData.write(to: fileURL)
+    }
+
+    private func removeTemporaryHistory(at fileURL: URL) {
+        let directory = fileURL.deletingLastPathComponent()
+        try? FileManager.default.removeItem(at: directory)
     }
 
     private func temporaryHistoryURL() -> URL {

@@ -1,10 +1,3 @@
-//
-//  DictationRuntime.swift
-//  WhisperDictation
-//
-//  Created by Stephen Parker on 27/11/2026.
-//
-
 import AppKit
 @preconcurrency import AVFoundation
 import Carbon
@@ -389,17 +382,16 @@ public final class DictationRuntime: ObservableObject {
         _ timings: DictationSessionCoordinator.SessionTimings?
     ) -> String {
         let audio = formattedSeconds(timings?.audioDuration)
-        let transcriptionDuration = timings?.transcriptionDuration
-        let modelLoadDuration = timings?.modelLoadDuration
-            ?? transcriptionDuration.map { _ in Duration.zero }
-        let load = formattedSeconds(modelLoadDuration.map { seconds(from: $0) })
-        let transcription = formattedSeconds(transcriptionDuration.map { seconds(from: $0) })
+        let load = formattedDuration(timings?.modelLoadDuration)
+        let transcription = formattedDuration(timings?.transcriptionDuration)
         return " audio=\(audio) load=\(load) transcribe=\(transcription)"
     }
 
-    private static func seconds(from duration: Duration) -> Double {
+    private static func formattedDuration(_ duration: Duration?) -> String {
+        guard let duration else { return "n/a" }
         let components = duration.components
-        return Double(components.seconds) + Double(components.attoseconds) / 1e18
+        let seconds = Double(components.seconds) + Double(components.attoseconds) / 1e18
+        return formattedSeconds(seconds)
     }
 
     private static func formattedSeconds(_ seconds: Double?) -> String {

@@ -1,26 +1,25 @@
-//
-//  OverlappingDictationTests.swift
-//  WhisperDictation
-//
-//  Created by Stephen Parker on 27/11/2026.
-//
-
 import Foundation
 import Testing
 @testable import WhisperDictationFeature
 
 @MainActor
 struct OverlappingDictationTests {
+    private struct CancelledTranscription: Equatable {
+        let recordings: [UUID: [String]]
+        let insertions: [String]
+    }
+
     @Test
-    func recordsTranscriptReturnedAfterCancellation() async throws {
+    func recordsTranscriptReturnedAfterCancellationWithoutInsertingIt() async throws {
         let expectedText = "  Keep this too.\n"
         let recorder = TranscriptRecorderFake()
         let transcriber = GatedTranscriber(stubbedTranscript: FinalTranscript(text: expectedText))
+        let inserter = GatedInserter()
         let coordinator = DictationSessionCoordinator(
             audio: OverlapAudio(),
             transcriber: transcriber,
             targets: RetainedTargets(),
-            inserter: GatedInserter(),
+            inserter: inserter,
             record: recorder.record
         )
 
@@ -30,10 +29,20 @@ struct OverlappingDictationTests {
         let job = try #require(queued)
         await transcriber.entered.wait()
         await coordinator.cancelDictation()
+        await inserter.proceed.open()
         await transcriber.proceed.open()
         _ = await job.value
 
-        #expect(recorder.transcripts == [sessionID: [expectedText]])
+        let insertions = await inserter.texts
+        let actual = CancelledTranscription(
+            recordings: recorder.transcripts,
+            insertions: insertions
+        )
+        let expected = CancelledTranscription(
+            recordings: [sessionID: [expectedText]],
+            insertions: []
+        )
+        #expect(actual == expected)
     }
 
     @Test func recordsDuringInsertionAndPreservesOrder() async {

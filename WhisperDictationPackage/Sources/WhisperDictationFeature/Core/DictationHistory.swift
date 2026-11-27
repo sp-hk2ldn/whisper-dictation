@@ -1,14 +1,6 @@
-//
-//  DictationHistory.swift
-//  WhisperDictation
-//
-//  Created by Stephen Parker on 27/11/2026.
-//
-
 import Combine
 import Darwin
 import Foundation
-import OSLog
 
 @MainActor
 public final class DictationHistory: ObservableObject {
@@ -21,10 +13,6 @@ public final class DictationHistory: ObservableObject {
     private static let capacity = 20
     private static let privateDirectoryPermissions = 0o700
     private static let privateFilePermissions = 0o600
-    private static let logger = Logger(
-        subsystem: "io.github.sp-hk2ldn.WhisperDictation",
-        category: "DictationHistory"
-    )
 
     public static var defaultFileURL: URL {
         WhisperModelConfiguration.defaultCacheRoot
@@ -33,9 +21,11 @@ public final class DictationHistory: ObservableObject {
     }
 
     @Published public private(set) var entries: [Entry]
+    @Published public private(set) var lastSaveFailed: Bool = false
 
     private let fileURL: URL
     private let now: () -> Date
+    private var requiresQuarantine = false
 
     public init(
         fileURL: URL = DictationHistory.defaultFileURL,
@@ -43,7 +33,16 @@ public final class DictationHistory: ObservableObject {
     ) {
         self.fileURL = fileURL
         self.now = now
-        entries = Self.loadEntries(from: fileURL)
+        do {
+            let data = try Data(contentsOf: fileURL)
+            let stored = try JSONDecoder().decode([Entry].self, from: data)
+            entries = Array(stored.prefix(Self.capacity))
+        } catch {
+            entries = []
+            var fileStatus = stat()
+            let status = lstat(fileURL.path, &fileStatus)
+            requiresQuarantine = status == 0 || errno != ENOENT
+        }
     }
 
     public func add(id: UUID, text: String) {
@@ -52,23 +51,30 @@ public final class DictationHistory: ObservableObject {
             text: text,
             date: now()
         )
-        let recent = [entry] + entries.filter { $0.id != id }
+        let recent = [entry] + entries
         let updated = Array(recent.prefix(Self.capacity))
         do {
+            try quarantineUnreadableFileIfNeeded(at: entry.date)
             try persist(updated)
+            lastSaveFailed = false
         } catch {
-            Self.logger.error("Unable to save dictation history.")
+            lastSaveFailed = true
         }
         entries = updated
     }
 
-    private static func loadEntries(from fileURL: URL) -> [Entry] {
-        guard
-            let data = try? Data(contentsOf: fileURL),
-            let stored = try? JSONDecoder().decode([Entry].self, from: data)
-        else { return [] }
-
-        return Array(stored.prefix(capacity))
+    private func quarantineUnreadableFileIfNeeded(at date: Date) throws {
+        guard requiresQuarantine else { return }
+        let timestamp = date.timeIntervalSince1970.rounded(.down)
+        guard let unixSeconds = Int64(exactly: timestamp) else {
+            throw DictationHistoryError.invalidArchiveTimestamp
+        }
+        let archive = fileURL.deletingLastPathComponent().appending(
+            path: "history-unreadable-\(unixSeconds).json",
+            directoryHint: .notDirectory
+        )
+        try FileManager.default.moveItem(at: fileURL, to: archive)
+        requiresQuarantine = false
     }
 
     private func persist(_ entries: [Entry]) throws {
@@ -103,5 +109,6 @@ public final class DictationHistory: ObservableObject {
 }
 
 private enum DictationHistoryError: Error {
+    case invalidArchiveTimestamp
     case replacementFailed
 }

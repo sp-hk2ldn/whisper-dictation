@@ -1,10 +1,3 @@
-//
-//  DictationContracts.swift
-//  WhisperDictation
-//
-//  Created by Stephen Parker on 27/11/2026.
-//
-
 import Foundation
 
 public struct CapturedUtterance: Sendable, Equatable {
@@ -25,16 +18,10 @@ public struct CapturedUtterance: Sendable, Equatable {
 public struct FinalTranscript: Sendable, Equatable {
     public let text: String
     public let modelLoadDuration: Duration?
-    public let transcriptionDuration: Duration?
 
-    public init(
-        text: String,
-        modelLoadDuration: Duration? = nil,
-        transcriptionDuration: Duration? = nil
-    ) {
+    public init(text: String, modelLoadDuration: Duration? = nil) {
         self.text = text
         self.modelLoadDuration = modelLoadDuration
-        self.transcriptionDuration = transcriptionDuration
     }
 }
 

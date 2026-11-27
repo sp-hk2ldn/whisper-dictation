@@ -1,10 +1,3 @@
-//
-//  WhisperKitTranscriber.swift
-//  WhisperDictation
-//
-//  Created by Stephen Parker on 27/11/2026.
-//
-
 import Foundation
 import WhisperKit
 
@@ -132,33 +125,26 @@ public actor WhisperKitTranscriber: Transcribing {
             usePrefillPrompt: true,
             detectLanguage: false,
             skipSpecialTokens: true,
-            wordTimestamps: false,
-            chunkingStrategy: .vad
+            wordTimestamps: false
         )
 
-        let transcriptionStart = clock.now
-        let results = try await loaded.engine.transcribe(
-            audioArray: utterance.samples,
-            decodeOptions: options
+        let results = try await transcriptionResults(
+            for: utterance.samples,
+            engine: loaded.engine,
+            options: options
         )
-        let transcriptionDuration = transcriptionStart.duration(to: clock.now)
 
         let text = results
-            .map { $0.text }
+            .map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
             .joined(separator: " ")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !text.isEmpty else {
             try checkCancellation(for: sessionID)
             throw WhisperKitTranscriberError.emptyTranscript
         }
 
-        return FinalTranscript(
-            text: text,
-            modelLoadDuration: loaded.loadDuration,
-            transcriptionDuration: transcriptionDuration
-        )
+        return FinalTranscript(text: text, modelLoadDuration: loaded.loadDuration)
     }
 
     public func cancel(sessionID: UUID) async {
@@ -168,6 +154,31 @@ public actor WhisperKitTranscriber: Transcribing {
     public func unload() async {
         await engine?.unloadModels()
         engine = nil
+    }
+
+    private func transcriptionResults(
+        for samples: [Float],
+        engine: WhisperKit,
+        options: DecodingOptions
+    ) async throws -> [TranscriptionResult] {
+        let windowSamples = engine.featureExtractor.windowSamples ?? Constants.defaultWindowSamples
+        guard samples.count > windowSamples else {
+            return try await engine.transcribe(audioArray: samples, decodeOptions: options)
+        }
+
+        let chunker = VADAudioChunker(vad: EnergyVAD())
+        let chunks = try await chunker.chunkAll(
+            audioArray: samples,
+            maxChunkLength: windowSamples,
+            decodeOptions: options
+        )
+        let audioArrays = chunks.map { $0.audioSamples }
+        let results = await engine.transcribeWithResults(
+            audioArrays: audioArrays,
+            decodeOptions: options
+        )
+        let chunkResults = try results.map { try $0.get() }
+        return chunkResults.flatMap { $0 }
     }
 
     private func loadEngineIfNeeded(allowDownload: Bool) async throws -> LoadedEngine {

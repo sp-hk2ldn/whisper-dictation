@@ -1,10 +1,3 @@
-//
-//  DictationSessionSmokeTests.swift
-//  WhisperDictation
-//
-//  Created by Stephen Parker on 27/11/2026.
-//
-
 import Foundation
 import Testing
 @testable import WhisperDictationFeature
@@ -142,6 +135,24 @@ struct DictationSessionSmokeTests {
 
         #expect(coordinator.phase == .recording)
         #expect(coordinator.failureDiagnostic == nil)
+    }
+
+    @Test
+    func failedTranscriptionStillHasATiming() async throws {
+        let coordinator = DictationSessionCoordinator(
+            audio: AudioFake(),
+            transcriber: FailsOnceTranscriberFake(),
+            targets: TargetFake(valid: true),
+            inserter: InsertionFake()
+        )
+
+        await coordinator.beginDictation()
+        let job = try #require(coordinator.enqueueRecording())
+        let timings = await job.value
+        let hasTranscriptionDuration = timings?.transcriptionDuration != nil
+        let expectedHasTranscriptionDuration = true
+
+        #expect(hasTranscriptionDuration == expectedHasTranscriptionDuration)
     }
 
     @Test

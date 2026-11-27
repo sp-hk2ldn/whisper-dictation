@@ -1,10 +1,3 @@
-//
-//  DictationSessionCoordinator.swift
-//  WhisperDictation
-//
-//  Created by Stephen Parker on 27/11/2026.
-//
-
 import Combine
 import Foundation
 
@@ -33,6 +26,7 @@ public final class DictationSessionCoordinator: ObservableObject {
     private let transcriber: any Transcribing
     private let targets: any TargetTracking
     private let inserter: any TextInserting
+    private let clock = ContinuousClock()
     private var recordingID: UUID?
     private var recordingStarted = false
     private var recordingTarget: TargetToken?
@@ -156,7 +150,8 @@ public final class DictationSessionCoordinator: ObservableObject {
         var stage = "audio-stop"
         var audioSummary = ""
         var audioDuration: TimeInterval?
-        var finalTranscript: FinalTranscript?
+        var modelLoadDuration: Duration?
+        var transcriptionDuration: Duration?
         do {
             let utterance = try await stop.value
             guard liveSessions.contains(id) else { return nil }
@@ -170,8 +165,15 @@ public final class DictationSessionCoordinator: ObservableObject {
             )
             if duration >= 0.1 {
                 stage = "transcription"
-                finalTranscript = try await transcribeAndInsert(
-                    utterance,
+                let transcript: FinalTranscript
+                do {
+                    let start = clock.now
+                    defer { transcriptionDuration = start.duration(to: clock.now) }
+                    transcript = try await transcriber.transcribeFinal(utterance, sessionID: id)
+                }
+                modelLoadDuration = transcript.modelLoadDuration
+                await recordAndInsert(
+                    transcript,
                     into: target,
                     sessionID: id
                 )
@@ -184,8 +186,8 @@ public final class DictationSessionCoordinator: ObservableObject {
         }
         let timings = SessionTimings(
             audioDuration: audioDuration,
-            modelLoadDuration: finalTranscript?.modelLoadDuration,
-            transcriptionDuration: finalTranscript?.transcriptionDuration
+            modelLoadDuration: modelLoadDuration,
+            transcriptionDuration: transcriptionDuration
         )
         guard liveSessions.remove(id) != nil else { return timings }
         pendingCount -= 1
@@ -195,28 +197,14 @@ public final class DictationSessionCoordinator: ObservableObject {
         return timings
     }
 
-    private func transcribeAndInsert(
-        _ utterance: CapturedUtterance,
-        into target: TargetToken?,
-        sessionID: UUID
-    ) async throws -> FinalTranscript {
-        let transcript = try await transcriber.transcribeFinal(utterance, sessionID: sessionID)
-        if !transcript.text.isEmpty {
-            record(sessionID, transcript.text)
-        }
-        await insert(
-            transcript,
-            into: target,
-            sessionID: sessionID
-        )
-        return transcript
-    }
-
-    private func insert(
+    private func recordAndInsert(
         _ transcript: FinalTranscript,
         into target: TargetToken?,
         sessionID: UUID
     ) async {
+        if !transcript.text.isEmpty {
+            record(sessionID, transcript.text)
+        }
         guard liveSessions.contains(sessionID) else { return }
         guard
             let target,
