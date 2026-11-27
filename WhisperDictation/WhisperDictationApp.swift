@@ -180,6 +180,10 @@ private struct DictationMenuContent: View {
                 )
             )
 
+            RecentDictationsView(history: runtime.history) { id in
+                runtime.copyDictation(id: id)
+            }
+
             MicroLightingControls(lighting: runtime.microLighting)
 
             if let error = runtime.lastError {

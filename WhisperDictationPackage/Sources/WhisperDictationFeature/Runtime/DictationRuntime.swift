@@ -88,7 +88,11 @@ public final class DictationRuntime: ObservableObject {
 
         let transcriber = WhisperKitTranscriber()
         let insertion = MacTextInsertionService()
-        let history = DictationHistory()
+        let history = DictationHistory(
+            fileURL: deterministicSmoke
+                ? URL.temporaryDirectory.appending(path: "whisper-dictation-smoke-history.json")
+                : DictationHistory.defaultFileURL
+        )
 
         self.audio = audio
         self.transcriber = transcriber
@@ -256,9 +260,10 @@ public final class DictationRuntime: ObservableObject {
         _ = Self.copyToPasteboard(entry.text)
     }
 
-    public func copyDictation(id: UUID) {
-        guard let entry = history.entries.first(where: { $0.id == id }) else { return }
-        _ = Self.copyToPasteboard(entry.text)
+    @discardableResult
+    public func copyDictation(id: UUID) -> Bool {
+        guard let entry = history.entries.first(where: { $0.id == id }) else { return false }
+        return Self.copyToPasteboard(entry.text)
     }
 
     private static func copyToPasteboard(_ text: String) -> Bool {

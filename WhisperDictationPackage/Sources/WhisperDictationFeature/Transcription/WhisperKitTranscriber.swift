@@ -166,7 +166,9 @@ public actor WhisperKitTranscriber: Transcribing {
             return try await engine.transcribe(audioArray: samples, decodeOptions: options)
         }
 
-        let chunker = VADAudioChunker(vad: EnergyVAD())
+        // The default padding stops chunking with up to one second of audio
+        // left over, which drops the end of the dictation.
+        let chunker = VADAudioChunker(windowPadding: 0, vad: EnergyVAD())
         let chunks = try await chunker.chunkAll(
             audioArray: samples,
             maxChunkLength: windowSamples,

@@ -10,7 +10,7 @@ public final class DictationHistory: ObservableObject {
         public let date: Date
     }
 
-    private static let capacity = 20
+    public static let capacity = 20
     private static let privateDirectoryPermissions = 0o700
     private static let privateFilePermissions = 0o600
 
@@ -65,6 +65,10 @@ public final class DictationHistory: ObservableObject {
 
     private func quarantineUnreadableFileIfNeeded(at date: Date) throws {
         guard requiresQuarantine else { return }
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            requiresQuarantine = false
+            return
+        }
         let timestamp = date.timeIntervalSince1970.rounded(.down)
         guard let unixSeconds = Int64(exactly: timestamp) else {
             throw DictationHistoryError.invalidArchiveTimestamp
