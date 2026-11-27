@@ -7,6 +7,12 @@ public final class DictationSessionCoordinator: ObservableObject {
         case idle, recording, transcribing, inserting, needsRecovery, failed
     }
 
+    struct SessionTimings: Sendable {
+        let audioDuration: TimeInterval?
+        let modelLoadDuration: Duration?
+        let transcriptionDuration: Duration?
+    }
+
     @Published public private(set) var phase: Phase = .idle
     @Published public private(set) var lastInsertionID: UUID?
     @Published public private(set) var recoveryCopied = false
@@ -15,10 +21,12 @@ public final class DictationSessionCoordinator: ObservableObject {
     @Published public private(set) var pendingCount = 0
 
     private let copyRecovery: @MainActor (String) -> Bool
+    private let record: @MainActor (UUID, String) -> Void
     private let audio: any AudioCapturing
     private let transcriber: any Transcribing
     private let targets: any TargetTracking
     private let inserter: any TextInserting
+    private let clock = ContinuousClock()
     private var recordingID: UUID?
     private var recordingStarted = false
     private var recordingTarget: TargetToken?
@@ -27,13 +35,19 @@ public final class DictationSessionCoordinator: ObservableObject {
     // The microphone is released before processing starts. These two fences
     // serialize microphone stop/start and model/clipboard work independently.
     private var captureStop: Task<CapturedUtterance, Error>?
-    private var processingTail: Task<Void, Never>?
+    private var processingTail: Task<SessionTimings?, Never>?
     private var hasFailure = false
 
-    public init(audio: any AudioCapturing, transcriber: any Transcribing,
-                targets: any TargetTracking, inserter: any TextInserting,
-                copyRecovery: @escaping @MainActor (String) -> Bool = { _ in false }) {
+    public init(
+        audio: any AudioCapturing,
+        transcriber: any Transcribing,
+        targets: any TargetTracking,
+        inserter: any TextInserting,
+        copyRecovery: @escaping @MainActor (String) -> Bool = { _ in false },
+        record: @escaping @MainActor (UUID, String) -> Void = { _, _ in }
+    ) {
         self.copyRecovery = copyRecovery
+        self.record = record
         self.audio = audio
         self.transcriber = transcriber
         self.targets = targets
@@ -90,12 +104,12 @@ public final class DictationSessionCoordinator: ObservableObject {
     }
 
     public func endDictation(sessionID expectedID: UUID? = nil) async {
-        await enqueueRecording(sessionID: expectedID)?.value
+        _ = await enqueueRecording(sessionID: expectedID)?.value
     }
 
     /// Free the microphone lane immediately; callers may await the returned
     /// processing task without preventing another shortcut press.
-    func enqueueRecording(sessionID expectedID: UUID? = nil) -> Task<Void, Never>? {
+    func enqueueRecording(sessionID expectedID: UUID? = nil) -> Task<SessionTimings?, Never>? {
         guard let id = recordingID, expectedID == nil || expectedID == id else { return nil }
         let target = recordingTarget
         recordingID = nil
@@ -105,48 +119,64 @@ public final class DictationSessionCoordinator: ObservableObject {
         let stop = Task { try await audio.stop(sessionID: id) }
         captureStop = stop
         let predecessor = processingTail
-        let job = Task { [self] in
+        let job = Task { [self] () -> SessionTimings? in
             // No concurrent Whisper inference or clipboard transactions, even
             // when a new microphone capture overlaps the preceding insertion.
-            await predecessor?.value
+            _ = await predecessor?.value
             guard liveSessions.contains(id) else {
                 if let target { await targets.releaseTarget(target) }
-                return
+                return nil
             }
-            await process(id: id, target: target, stop: stop)
+            let timings = await process(
+                id: id,
+                target: target,
+                stop: stop
+            )
             if let target { await targets.releaseTarget(target) }
+            return timings
         }
         processingTail = job
         refreshPhase()
         return job
     }
 
-    private func process(id: UUID, target: TargetToken?, stop: Task<CapturedUtterance, Error>) async {
+    private func process(
+        id: UUID,
+        target: TargetToken?,
+        stop: Task<CapturedUtterance, Error>
+    ) async -> SessionTimings? {
         processingPhase = .transcribing
         refreshPhase()
         var stage = "audio-stop"
         var audioSummary = ""
+        var audioDuration: TimeInterval?
+        var modelLoadDuration: Duration?
+        var transcriptionDuration: Duration?
         do {
             let utterance = try await stop.value
-            guard liveSessions.contains(id) else { return }
+            guard liveSessions.contains(id) else { return nil }
+            let duration = utterance.duration
+            audioDuration = duration
             let peak = utterance.samples.reduce(Float.zero) { max($0, abs($1)) }
-            audioSummary = String(format: " duration=%.3fs peak=%.4f", utterance.duration, peak)
-            if utterance.duration >= 0.1 {
+            audioSummary = String(
+                format: " duration=%.3fs peak=%.4f",
+                duration,
+                peak
+            )
+            if duration >= 0.1 {
                 stage = "transcription"
-                let transcript = try await transcriber.transcribeFinal(utterance, sessionID: id)
-                guard liveSessions.contains(id) else { return }
-                if let target, let text = TranscriptPolicy.safeText(from: transcript, for: target) {
-                    let valid = await targets.isStillValid(target)
-                    guard liveSessions.contains(id) else { return }
-                    if valid {
-                        processingPhase = .inserting
-                        refreshPhase()
-                        let result = await inserter.insert(text, into: target, sessionID: id)
-                        guard liveSessions.contains(id) else { return }
-                        if result == .inserted { lastInsertionID = id }
-                        else { recover(text.value) }
-                    } else { recover(text.value) }
-                } else { recover(transcript.text) }
+                let transcript: FinalTranscript
+                do {
+                    let start = clock.now
+                    defer { transcriptionDuration = start.duration(to: clock.now) }
+                    transcript = try await transcriber.transcribeFinal(utterance, sessionID: id)
+                }
+                modelLoadDuration = transcript.modelLoadDuration
+                await recordAndInsert(
+                    transcript,
+                    into: target,
+                    sessionID: id
+                )
             }
         } catch {
             if liveSessions.contains(id) {
@@ -154,11 +184,56 @@ public final class DictationSessionCoordinator: ObservableObject {
                 failureDiagnostic = "\(stage) \(String(reflecting: error))\(audioSummary)"
             }
         }
-        guard liveSessions.remove(id) != nil else { return }
+        let timings = SessionTimings(
+            audioDuration: audioDuration,
+            modelLoadDuration: modelLoadDuration,
+            transcriptionDuration: transcriptionDuration
+        )
+        guard liveSessions.remove(id) != nil else { return timings }
         pendingCount -= 1
         if liveSessions.isEmpty { await audio.finishBatch() }
         processingPhase = nil
         refreshPhase()
+        return timings
+    }
+
+    private func recordAndInsert(
+        _ transcript: FinalTranscript,
+        into target: TargetToken?,
+        sessionID: UUID
+    ) async {
+        if !transcript.text.isEmpty {
+            record(sessionID, transcript.text)
+        }
+        guard liveSessions.contains(sessionID) else { return }
+        guard
+            let target,
+            let text = TranscriptPolicy.safeText(from: transcript, for: target)
+        else {
+            recover(transcript.text)
+            return
+        }
+
+        let valid = await targets.isStillValid(target)
+        guard liveSessions.contains(sessionID) else { return }
+        guard valid else {
+            recover(text.value)
+            return
+        }
+
+        processingPhase = .inserting
+        refreshPhase()
+        let result = await inserter.insert(
+            text,
+            into: target,
+            sessionID: sessionID
+        )
+        guard liveSessions.contains(sessionID) else { return }
+        guard result == .inserted else {
+            recover(text.value)
+            return
+        }
+        lastInsertionID = sessionID
     }
 
     private func recover(_ text: String) {

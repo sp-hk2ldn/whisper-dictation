@@ -4,6 +4,31 @@ import Testing
 
 @MainActor
 struct DictationSessionSmokeTests {
+    enum InsertionOutcome: CaseIterable {
+        case inserted
+        case refused
+        case invalidTarget
+    }
+
+    @Test(arguments: InsertionOutcome.allCases)
+    func recordsRawTranscriptForEachInsertionOutcome(_ outcome: InsertionOutcome) async throws {
+        let expectedText = "  Keep this.\n"
+        let recorder = TranscriptRecorderFake()
+        let coordinator = DictationSessionCoordinator(
+            audio: AudioFake(),
+            transcriber: TranscriberFake(text: expectedText),
+            targets: TargetFake(valid: outcome != .invalidTarget),
+            inserter: InsertionFake(stubbedResult: outcome == .refused ? .refused : .inserted),
+            record: recorder.record
+        )
+
+        let startedID = await coordinator.beginDictation()
+        let sessionID = try #require(startedID)
+        await coordinator.endDictation(sessionID: sessionID)
+
+        #expect(recorder.transcripts == [sessionID: [expectedText]])
+    }
+
     @Test
     func recoveryIsCopiedAndSurvivesAnotherRecordingUntilDismissed() async {
         var clipboard = "original"
@@ -113,6 +138,24 @@ struct DictationSessionSmokeTests {
     }
 
     @Test
+    func failedTranscriptionStillHasATiming() async throws {
+        let coordinator = DictationSessionCoordinator(
+            audio: AudioFake(),
+            transcriber: FailsOnceTranscriberFake(),
+            targets: TargetFake(valid: true),
+            inserter: InsertionFake()
+        )
+
+        await coordinator.beginDictation()
+        let job = try #require(coordinator.enqueueRecording())
+        let timings = await job.value
+        let hasTranscriptionDuration = timings?.transcriptionDuration != nil
+        let expectedHasTranscriptionDuration = true
+
+        #expect(hasTranscriptionDuration == expectedHasTranscriptionDuration)
+    }
+
+    @Test
     func cancellationPreventsInsertion() async {
         let inserter = InsertionFake()
         let coordinator = DictationSessionCoordinator(
@@ -211,7 +254,12 @@ private actor TargetFake: TargetTracking {
 }
 
 private actor InsertionFake: TextInserting {
+    private let stubbedResult: InsertionResult
     private(set) var insertions: [String] = []
+
+    init(stubbedResult: InsertionResult = .inserted) {
+        self.stubbedResult = stubbedResult
+    }
 
     func insert(
         _ text: SafeInsertionText,
@@ -219,6 +267,15 @@ private actor InsertionFake: TextInserting {
         sessionID: UUID
     ) async -> InsertionResult {
         insertions.append(text.value)
-        return .inserted
+        return stubbedResult
+    }
+}
+
+@MainActor
+final class TranscriptRecorderFake {
+    private(set) var transcripts: [UUID: [String]] = [:]
+
+    func record(id: UUID, text: String) {
+        transcripts[id, default: []].append(text)
     }
 }

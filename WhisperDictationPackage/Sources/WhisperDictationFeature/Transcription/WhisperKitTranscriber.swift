@@ -37,12 +37,7 @@ public struct WhisperModelConfiguration: Sendable, Equatable {
     }
 
     public static var defaultCacheRoot: URL {
-        let applicationSupport = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first!
-
-        return applicationSupport
+        URL.applicationSupportDirectory
             .appending(path: "WhisperDictation", directoryHint: .isDirectory)
             .appending(path: "Models", directoryHint: .isDirectory)
     }
@@ -88,7 +83,13 @@ public struct WhisperModelConfiguration: Sendable, Equatable {
 }
 
 public actor WhisperKitTranscriber: Transcribing {
+    private struct LoadedEngine {
+        let engine: WhisperKit
+        let loadDuration: Duration?
+    }
+
     private let model: WhisperModelConfiguration
+    private let clock = ContinuousClock()
     private var engine: WhisperKit?
     private var cancelledSessions: Set<UUID> = []
 
@@ -112,7 +113,8 @@ public actor WhisperKitTranscriber: Transcribing {
         }
 
         cancelledSessions.remove(sessionID)
-        let engine = try await loadEngineIfNeeded(allowDownload: false)
+        defer { cancelledSessions.remove(sessionID) }
+        let loaded = try await loadEngineIfNeeded(allowDownload: false)
         try checkCancellation(for: sessionID)
 
         let options = DecodingOptions(
@@ -126,22 +128,23 @@ public actor WhisperKitTranscriber: Transcribing {
             wordTimestamps: false
         )
 
-        let results = try await engine.transcribe(
-            audioArray: utterance.samples,
-            decodeOptions: options
+        let results = try await transcriptionResults(
+            for: utterance.samples,
+            engine: loaded.engine,
+            options: options
         )
-        try checkCancellation(for: sessionID)
 
         let text = results
-            .map(\.text)
-            .joined()
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
 
         guard !text.isEmpty else {
+            try checkCancellation(for: sessionID)
             throw WhisperKitTranscriberError.emptyTranscript
         }
 
-        return FinalTranscript(text: text)
+        return FinalTranscript(text: text, modelLoadDuration: loaded.loadDuration)
     }
 
     public func cancel(sessionID: UUID) async {
@@ -153,9 +156,36 @@ public actor WhisperKitTranscriber: Transcribing {
         engine = nil
     }
 
-    private func loadEngineIfNeeded(allowDownload: Bool) async throws -> WhisperKit {
+    private func transcriptionResults(
+        for samples: [Float],
+        engine: WhisperKit,
+        options: DecodingOptions
+    ) async throws -> [TranscriptionResult] {
+        let windowSamples = engine.featureExtractor.windowSamples ?? Constants.defaultWindowSamples
+        guard samples.count > windowSamples else {
+            return try await engine.transcribe(audioArray: samples, decodeOptions: options)
+        }
+
+        // The default padding stops chunking with up to one second of audio
+        // left over, which drops the end of the dictation.
+        let chunker = VADAudioChunker(windowPadding: 0, vad: EnergyVAD())
+        let chunks = try await chunker.chunkAll(
+            audioArray: samples,
+            maxChunkLength: windowSamples,
+            decodeOptions: options
+        )
+        let audioArrays = chunks.map { $0.audioSamples }
+        let results = await engine.transcribeWithResults(
+            audioArrays: audioArrays,
+            decodeOptions: options
+        )
+        let chunkResults = try results.map { try $0.get() }
+        return chunkResults.flatMap { $0 }
+    }
+
+    private func loadEngineIfNeeded(allowDownload: Bool) async throws -> LoadedEngine {
         if let engine {
-            return engine
+            return LoadedEngine(engine: engine, loadDuration: nil)
         }
 
         guard model.isInstalled || allowDownload else {
@@ -193,9 +223,11 @@ public actor WhisperKitTranscriber: Transcribing {
             )
         }
 
+        let loadStart = clock.now
         let loadedEngine = try await WhisperKit(config)
+        let loadDuration = loadStart.duration(to: clock.now)
         engine = loadedEngine
-        return loadedEngine
+        return LoadedEngine(engine: loadedEngine, loadDuration: loadDuration)
     }
 
     private func checkCancellation(for sessionID: UUID) throws {
